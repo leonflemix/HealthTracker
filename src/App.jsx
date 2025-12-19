@@ -52,40 +52,62 @@ import {
   AlignLeft
 } from 'lucide-react';
 
-// --- Firebase Configuration & Environment Setup ---
-// This block ensures the app works BOTH in this preview and when you deploy to Vercel.
+// --- Environment Helper ---
+// This safely reads environment variables in both Vite and Create React App environments
+const getEnvVar = (key) => {
+  try {
+    // 1. Try Vite (import.meta.env)
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+      // Try VITE_ prefix first (standard), then REACT_APP_ (legacy compat)
+      return import.meta.env[`VITE_${key}`] || import.meta.env[`REACT_APP_${key}`];
+    }
+  } catch (e) {
+    // ignore
+  }
 
+  try {
+    // 2. Try Standard Process (Create React App / Next.js)
+    if (typeof process !== 'undefined' && process.env) {
+      return process.env[`REACT_APP_${key}`] || process.env[`VITE_${key}`];
+    }
+  } catch (e) {
+    // ignore
+  }
+  
+  return '';
+};
+
+// --- Firebase Configuration ---
 let firebaseConfig;
 let appId = 'default-app-id';
 
 try {
-  // 1. Try to load config from the local preview environment
+  // 1. Try to load config from the local preview environment (Canvas)
   if (typeof __firebase_config !== 'undefined') {
     firebaseConfig = JSON.parse(__firebase_config);
     appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
   } else {
-    // 2. If not found, look for standard environment variables (e.g., from Vercel)
-    // You will set these in your Vercel Project Settings
+    // 2. Load from Environment Variables (Vercel/Local)
     firebaseConfig = {
-      apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
-      authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
-      projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
-      storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
-      messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
-      appId: process.env.REACT_APP_FIREBASE_APP_ID
+      apiKey: getEnvVar('FIREBASE_API_KEY'),
+      authDomain: getEnvVar('FIREBASE_AUTH_DOMAIN'),
+      projectId: getEnvVar('FIREBASE_PROJECT_ID'),
+      storageBucket: getEnvVar('FIREBASE_STORAGE_BUCKET'),
+      messagingSenderId: getEnvVar('FIREBASE_MESSAGING_SENDER_ID'),
+      appId: getEnvVar('FIREBASE_APP_ID')
     };
-    // In production, we can usually use a simpler path, but for consistency with the code structure
-    // we can keep using an appId or default to 'production'.
     appId = 'production'; 
   }
 } catch (e) {
   console.error('Firebase config loading error:', e);
+  firebaseConfig = {}; // Prevent crash on init
 }
 
 // Initialize Firebase
-const app = initializeApp(firebaseConfig || {}); // Fallback to empty obj to prevent immediate crash if config missing
-const auth = getAuth(app);
-const db = getFirestore(app);
+// We check if apiKey exists to avoid Firebase crashing with "invalid configuration" immediately
+const app = firebaseConfig.apiKey ? initializeApp(firebaseConfig) : undefined;
+const auth = app ? getAuth(app) : undefined;
+const db = app ? getFirestore(app) : undefined;
 
 // --- Constants & Configs ---
 
@@ -124,9 +146,8 @@ const TABS = [
 
 // --- Helper Functions ---
 
-// This ensures all data is saved under 'artifacts/{appId}/users/{uid}'
-// This guarantees that User A cannot access User B's data.
 const getUserCollection = (userUid, collectionName) => {
+  if (!db) return null; // Safety check if DB init failed
   return collection(db, 'artifacts', appId, 'users', userUid, collectionName);
 };
 
@@ -217,14 +238,20 @@ export default function App() {
   // --- Auth & Data Fetching ---
 
   useEffect(() => {
+    // If Firebase didn't initialize (missing config), stop here to prevent errors
+    if (!auth) return;
+
     const initAuth = async () => {
       // If we have a custom token (Preview env), use it.
       if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
         await signInWithCustomToken(auth, __initial_auth_token);
       } else {
         // Fallback for Vercel/Prod: Anonymous Sign-in
-        // You can easily swap this for Google Auth later if desired.
-        await signInAnonymously(auth);
+        try {
+          await signInAnonymously(auth);
+        } catch (error) {
+          console.error("Auth error:", error);
+        }
       }
     };
     initAuth();
@@ -233,33 +260,28 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !db) return;
 
-    // Fetch Custom Trackers
-    const trackersQuery = getUserCollection(user.uid, 'tracker_definitions');
-    const unsubTrackers = onSnapshot(trackersQuery, (snapshot) => {
-      setTrackers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    });
+    // Helper to wrap onSnapshot with error logging
+    const safeSubscribe = (queryRef, setter) => {
+        if (!queryRef) return () => {};
+        return onSnapshot(queryRef, (snapshot) => {
+            setter(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        }, (err) => console.error("Firestore error:", err));
+    };
 
-    // Fetch Entries
+    const unsubTrackers = safeSubscribe(getUserCollection(user.uid, 'tracker_definitions'), setTrackers);
+    
+    // Entries need sorting logic in the callback
     const entriesQuery = getUserCollection(user.uid, 'health_entries');
-    const unsubEntries = onSnapshot(entriesQuery, (snapshot) => {
+    const unsubEntries = onSnapshot(entriesQuery || [], (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       data.sort((a, b) => new Date(b.date) - new Date(a.date));
       setEntries(data);
-    });
+    }, (err) => console.error("Entries error:", err));
 
-    // Fetch Meds
-    const medsQuery = getUserCollection(user.uid, 'medications');
-    const unsubMeds = onSnapshot(medsQuery, (snapshot) => {
-      setMedications(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    });
-
-    // Fetch MedLogs
-    const medLogsQuery = getUserCollection(user.uid, 'medication_logs');
-    const unsubMedLogs = onSnapshot(medLogsQuery, (snapshot) => {
-      setMedLogs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    });
+    const unsubMeds = safeSubscribe(getUserCollection(user.uid, 'medications'), setMedications);
+    const unsubMedLogs = safeSubscribe(getUserCollection(user.uid, 'medication_logs'), setMedLogs);
 
     return () => {
       unsubTrackers();
@@ -269,10 +291,10 @@ export default function App() {
     };
   }, [user]);
 
-  // --- Actions: Trackers ---
+  // --- Actions ---
 
   const handleSaveTracker = async () => {
-    if (!user) return;
+    if (!user || !db) return;
     if (!trackerForm.name) return alert("Please name your tracker");
     if (trackerForm.types.length === 0) return alert("Please select at least one data field");
 
@@ -291,7 +313,7 @@ export default function App() {
   };
 
   const handleDeleteTracker = async (id) => {
-    if (!user || !confirm("Delete this tracker? Entries remain but you can't add new ones.")) return;
+    if (!user || !db || !confirm("Delete this tracker? Entries remain but you can't add new ones.")) return;
     await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'tracker_definitions', id));
   };
 
@@ -303,8 +325,6 @@ export default function App() {
       return { ...prev, types };
     });
   };
-
-  // --- Actions: Entries ---
 
   const openEntryModal = (tracker, entry = null) => {
     setSelectedTracker(tracker);
@@ -322,7 +342,7 @@ export default function App() {
   };
 
   const handleSaveEntry = async () => {
-    if (!user) return;
+    if (!user || !db) return;
     
     const entryData = {
       ...formData,
@@ -345,14 +365,12 @@ export default function App() {
   };
 
   const handleDeleteEntry = async (id) => {
-    if (!user || !confirm('Delete this entry?')) return;
+    if (!user || !db || !confirm('Delete this entry?')) return;
     await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'health_entries', id));
   };
 
-  // --- Actions: Meds ---
-
   const handleSaveMedication = async () => {
-    if (!user) return;
+    if (!user || !db) return;
     await addDoc(getUserCollection(user.uid, 'medications'), {
       ...medForm,
       active: true,
@@ -363,12 +381,12 @@ export default function App() {
   };
 
   const handleDeleteMedication = async (id) => {
-    if (!user || !confirm('Delete this medication?')) return;
+    if (!user || !db || !confirm('Delete this medication?')) return;
     await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'medications', id));
   };
 
   const toggleMedTaken = async (medId, timeSlot) => {
-    if (!user) return;
+    if (!user || !db) return;
     const todayStr = new Date().toISOString().split('T')[0];
     const existingLog = medLogs.find(log => log.medicationId === medId && log.date === todayStr && log.time === timeSlot);
 
@@ -385,7 +403,7 @@ export default function App() {
     }
   };
 
-  // --- Render Dynamic Form ---
+  // --- Render Helpers ---
 
   const renderDynamicForm = () => {
     if (!selectedTracker) return null;
@@ -488,6 +506,22 @@ export default function App() {
   };
 
   // --- Views ---
+  
+  // Safe check for missing config using typeof to avoid ReferenceError
+  const isPreview = typeof __firebase_config !== 'undefined';
+  const hasConfig = firebaseConfig && firebaseConfig.apiKey;
+
+  if (!hasConfig && !isPreview) {
+      return (
+          <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+              <div className="text-center max-w-md">
+                  <AlertCircle size={48} className="mx-auto text-red-500 mb-4" />
+                  <h1 className="text-2xl font-bold text-slate-800 mb-2">Configuration Missing</h1>
+                  <p className="text-slate-600 mb-4">The app cannot connect to Firebase. Please check your environment variables in Vercel or your .env file.</p>
+              </div>
+          </div>
+      );
+  }
 
   const Dashboard = () => {
     const todayStr = new Date().toISOString().split('T')[0];
@@ -587,8 +621,9 @@ export default function App() {
            <Card className="divide-y divide-slate-100">
              {entries.slice(0, 5).map(entry => {
                const tracker = trackers.find(t => t.id === entry.trackerId);
-               const Icon = tracker ? ICON_MAP[tracker.icon] : Activity;
-               const color = tracker ? COLOR_OPTIONS[tracker.colorIndex] : COLOR_OPTIONS[0];
+               // Safe fallback if tracker was deleted or colorIndex is invalid
+               const Icon = tracker && ICON_MAP[tracker.icon] ? ICON_MAP[tracker.icon] : Activity;
+               const color = tracker && COLOR_OPTIONS[tracker.colorIndex] ? COLOR_OPTIONS[tracker.colorIndex] : COLOR_OPTIONS[0];
 
                const getSummary = (e) => {
                    const parts = [];
@@ -672,7 +707,7 @@ export default function App() {
                     if (group.values.length === 0) return null;
                     const avg = group.values.reduce((a,b) => a+b, 0) / group.values.length;
                     const total = group.values.reduce((a,b) => a+b, 0);
-                    const color = COLOR_OPTIONS[group.colorIndex];
+                    const color = COLOR_OPTIONS[group.colorIndex] || COLOR_OPTIONS[0];
                     const type = group.graphType;
 
                     return (
@@ -724,7 +759,7 @@ export default function App() {
         <div className="space-y-3">
             {trackers.map(tracker => {
                 const Icon = ICON_MAP[tracker.icon] || Activity;
-                const color = COLOR_OPTIONS[tracker.colorIndex];
+                const color = COLOR_OPTIONS[tracker.colorIndex] || COLOR_OPTIONS[0];
                 const types = tracker.types || [tracker.dataType];
 
                 return (
@@ -818,7 +853,7 @@ export default function App() {
           <tbody className="divide-y divide-slate-100">
             {entries.map(entry => {
                const tracker = trackers.find(t => t.id === entry.trackerId);
-               const color = tracker ? COLOR_OPTIONS[tracker.colorIndex] : COLOR_OPTIONS[0];
+               const color = tracker && COLOR_OPTIONS[tracker.colorIndex] ? COLOR_OPTIONS[tracker.colorIndex] : COLOR_OPTIONS[0];
 
                const getDetails = (e) => {
                    const parts = [];
