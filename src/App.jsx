@@ -65,7 +65,6 @@ const GlobalStyles = () => (
     .safe-area-bottom {
       padding-bottom: env(safe-area-inset-bottom, 20px);
     }
-    /* Scrollbar styling for modal content */
     ::-webkit-scrollbar {
       width: 8px;
     }
@@ -226,6 +225,324 @@ const Modal = ({ isOpen, onClose, title, children }) => {
   );
 };
 
+// --- Screen Components (Moved Outside App to prevent Flashing/Hanging) ---
+
+const DashboardView = ({ trackers, medications, medLogs, entries, actions }) => {
+  const todayStr = new Date().toISOString().split('T')[0];
+  const todaysMeds = useMemo(() => {
+    return medications.filter(m => m.active).map(med => {
+        return med.times.map(time => ({ ...med, scheduledTime: time, isTaken: medLogs.some(l => l.medicationId === med.id && l.date === todayStr && l.time === time) }));
+    }).flat().sort((a,b) => a.scheduledTime.localeCompare(b.scheduledTime));
+  }, [medications, medLogs, todayStr]);
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      <section>
+        <div className="flex justify-between items-center mb-3">
+           <h2 className="text-lg font-bold text-slate-800">Quick Track</h2>
+           <Button variant="ghost" className="text-sm" onClick={() => actions.setActiveTab('settings')}><Edit2 size={14} /> Customize</Button>
+        </div>
+        {trackers.length === 0 ? (
+           <div className="bg-white border-2 border-dashed border-slate-300 rounded-xl p-6 text-center">
+              <p className="text-slate-500 mb-4">You haven't set up any trackers yet.</p>
+              <Button onClick={() => actions.setIsTrackerBuilderOpen(true)}>Create Your First Tracker</Button>
+           </div>
+        ) : (
+           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {trackers.map((tracker) => {
+                const Icon = ICON_MAP[tracker.icon] || Activity;
+                const color = COLOR_OPTIONS[tracker.colorIndex] || COLOR_OPTIONS[0];
+                const types = tracker.types || [tracker.dataType];
+                return (
+                  <button key={tracker.id} onClick={() => actions.openEntryModal(tracker)} className="flex flex-col items-center justify-center p-4 bg-white rounded-xl shadow-sm border border-slate-100 hover:shadow-md hover:border-blue-200 transition-all group">
+                    <div className={`p-3 rounded-full mb-2 ${color.bg} ${color.text} group-hover:scale-110 transition-transform`}><Icon size={24} /></div>
+                    <span className="font-semibold text-slate-700">{tracker.name}</span>
+                    <div className="flex gap-1 mt-1 justify-center flex-wrap px-2">
+                      {types.map(t => (<span key={t} className="text-[9px] px-1 py-0.5 bg-slate-100 text-slate-500 rounded uppercase tracking-wider font-bold">{DATA_TYPES.find(d => d.id === t)?.label.split(' ')[0] || t}</span>))}
+                    </div>
+                  </button>
+                );
+              })}
+           </div>
+        )}
+      </section>
+
+      <section>
+        <div className="flex justify-between items-center mb-3">
+          <h2 className="text-lg font-bold text-slate-800">Medications</h2>
+          <Button variant="ghost" className="text-sm" onClick={() => actions.setActiveTab('meds')}>Manage</Button>
+        </div>
+        <Card className="divide-y divide-slate-100">
+          {todaysMeds.length === 0 ? (
+            <div className="p-6 text-center text-slate-500 text-sm">No medications scheduled for today.</div>
+          ) : (
+            todaysMeds.map((med, idx) => (
+              <div key={`${med.id}-${med.scheduledTime}-${idx}`} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
+                <div className="flex items-center gap-4">
+                  <button onClick={() => actions.toggleMedTaken(med.id, med.scheduledTime)} className={`transition-all ${med.isTaken ? 'text-green-500' : 'text-slate-300 hover:text-green-400'}`}>
+                    {med.isTaken ? <CheckCircle size={28} className="fill-green-100" /> : <Circle size={28} />}
+                  </button>
+                  <div>
+                    <div className={`font-semibold ${med.isTaken ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{med.name}</div>
+                    <div className="text-xs text-slate-500 flex items-center gap-1"><Clock size={12} /> {med.scheduledTime} &bull; {med.dosage}</div>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </Card>
+      </section>
+
+      <section>
+         <h2 className="text-lg font-bold text-slate-800 mb-3">Recent Logs</h2>
+         <Card className="divide-y divide-slate-100">
+           {entries.slice(0, 5).map(entry => {
+             const tracker = trackers.find(t => t.id === entry.trackerId);
+             const Icon = tracker && ICON_MAP[tracker.icon] ? ICON_MAP[tracker.icon] : Activity;
+             const color = tracker && COLOR_OPTIONS[tracker.colorIndex] ? COLOR_OPTIONS[tracker.colorIndex] : COLOR_OPTIONS[0];
+
+             const getSummary = (e) => {
+                 const parts = [];
+                 if (e.boolean !== undefined) parts.push(e.boolean ? 'Yes' : 'No');
+                 if (e.scale5) parts.push(`Rating: ${e.scale5}/5`);
+                 if (e.scale10) parts.push(`Level: ${e.scale10}/10`);
+                 if (e.number) parts.push(`Val: ${e.number}`);
+                 if (e.duration) parts.push(`${e.duration}m`);
+                 if (e.text) parts.push(`"${e.text}"`);
+                 if (e.value && parts.length === 0) parts.push(e.value);
+                 if (e.notes && !e.text) parts.push(e.notes);
+                 return parts.join(' • ');
+             };
+
+             return (
+               <div key={entry.id} className="p-4 flex items-center gap-3">
+                 <div className={`p-2 rounded-full ${color.bg} ${color.text}`}><Icon size={16} /></div>
+                 <div className="flex-1">
+                   <div className="flex justify-between">
+                     <span className="font-medium text-slate-800">{tracker ? tracker.name : 'Unknown Tracker'}</span>
+                     <span className="text-xs text-slate-400">{new Date(entry.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                   </div>
+                   <div className="text-sm text-slate-600 truncate max-w-[250px]">{getSummary(entry)}</div>
+                 </div>
+               </div>
+             );
+           })}
+           {entries.length === 0 && <div className="p-4 text-center text-slate-500 text-sm">No recent activity.</div>}
+         </Card>
+      </section>
+    </div>
+  );
+};
+
+const MedicationsView = ({ medications, actions }) => (
+  <div className="space-y-4 animate-fade-in">
+      <div className="flex justify-between items-center">
+          <h2 className="text-xl font-bold text-slate-800">My Medications</h2>
+          <Button onClick={() => actions.setIsMedModalOpen(true)} className="text-sm"><Plus size={16}/> Add New</Button>
+      </div>
+      {medications.length === 0 ? (
+          <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed border-slate-300">
+              <Pill size={40} className="mx-auto text-slate-300 mb-2" />
+              <p className="text-slate-500">No medications added yet.</p>
+          </div>
+      ) : (
+          <div className="grid gap-4">
+              {medications.map(med => (
+                  <Card key={med.id} className="p-4 flex justify-between items-start">
+                      <div>
+                          <h3 className="font-bold text-slate-800 text-lg">{med.name}</h3>
+                          <div className="flex flex-wrap gap-2 mt-2">
+                              <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs font-semibold">{med.dosage}</span>
+                              <span className="px-2 py-1 bg-purple-50 text-purple-700 rounded text-xs font-semibold">{med.frequency}</span>
+                          </div>
+                          <div className="mt-3 flex gap-2">
+                              {med.times.map(t => (<span key={t} className="flex items-center gap-1 text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded"><Clock size={10} /> {t}</span>))}
+                          </div>
+                      </div>
+                      <Button variant="ghost" onClick={() => actions.handleDeleteMedication(med.id)} className="text-red-400 hover:text-red-600"><Trash2 size={18} /></Button>
+                  </Card>
+              ))}
+          </div>
+      )}
+  </div>
+);
+
+const ReportsView = ({ entries, trackers }) => {
+  const oneWeekAgo = new Date();
+  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+  const weeklyEntries = useMemo(() => entries.filter(e => new Date(e.date) >= oneWeekAgo), [entries]);
+
+  const groupedData = useMemo(() => {
+      const groups = {};
+      trackers.forEach(t => groups[t.id] = { ...t, values: [] });
+      weeklyEntries.forEach(e => {
+          if (groups[e.trackerId]) {
+              let val = null;
+              let type = 'none';
+              if (e.scale5 !== undefined) { val = e.scale5; type = 'scale5'; }
+              else if (e.scale10 !== undefined) { val = e.scale10; type = 'scale10'; }
+              else if (e.number !== undefined) { val = e.number; type = 'number'; }
+              else if (e.duration !== undefined) { val = e.duration; type = 'duration'; }
+              else if (e.boolean !== undefined) { val = e.boolean ? 1 : 0; type = 'boolean'; }
+              else if (e.value !== undefined) { 
+                  val = typeof e.value === 'boolean' ? (e.value ? 1 : 0) : Number(e.value);
+                  type = isNaN(val) ? 'text' : 'legacy'; 
+              }
+              if (val !== null && type !== 'text') {
+                  groups[e.trackerId].values.push(val);
+                  if (!groups[e.trackerId].graphType) groups[e.trackerId].graphType = type;
+              }
+          }
+      });
+      return groups;
+  }, [weeklyEntries, trackers]);
+
+  return (
+      <div className="space-y-6 animate-fade-in">
+          <h2 className="text-xl font-bold text-slate-800">Weekly Summary</h2>
+          {trackers.length === 0 && <p className="text-slate-500">No trackers to report on.</p>}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {Object.values(groupedData).map(group => {
+                  if (group.values.length === 0) return null;
+                  const avg = group.values.reduce((a,b) => a+b, 0) / group.values.length;
+                  const total = group.values.reduce((a,b) => a+b, 0);
+                  const color = COLOR_OPTIONS[group.colorIndex] || COLOR_OPTIONS[0];
+                  const type = group.graphType;
+                  return (
+                      <Card key={group.id} className="p-4">
+                          <div className="flex items-center gap-2 mb-4">
+                              <div className={`w-2 h-2 rounded-full ${color.bg.replace('bg-', 'bg-')}`} style={{backgroundColor: color.hex}} />
+                              <h3 className="font-bold text-slate-700">{group.name}</h3>
+                          </div>
+                          {(type === 'scale5' || type === 'scale10') && (
+                              <div>
+                                  <div className="text-3xl font-bold text-slate-800">{avg.toFixed(1)}</div>
+                                  <div className="text-xs text-slate-400 uppercase">Average Score</div>
+                                  <div className="mt-3 h-1 w-full bg-slate-100 rounded-full overflow-hidden">
+                                      <div className="h-full" style={{ width: `${(avg / (type === 'scale5' ? 5 : 10)) * 100}%`, backgroundColor: color.hex }} />
+                                  </div>
+                              </div>
+                          )}
+                          {(type === 'number' || type === 'duration' || type === 'legacy') && (
+                              <div>
+                                   <div className="text-3xl font-bold text-slate-800">{total}</div>
+                                   <div className="text-xs text-slate-400 uppercase">Weekly Total</div>
+                                   <div className="mt-2 text-sm text-slate-600">Daily Avg: {(total / 7).toFixed(1)}</div>
+                              </div>
+                          )}
+                           {type === 'boolean' && (
+                              <div>
+                                   <div className="text-3xl font-bold text-slate-800">{total} <span className="text-sm font-normal text-slate-400">/ {group.values.length}</span></div>
+                                   <div className="text-xs text-slate-400 uppercase">Times Occurred</div>
+                              </div>
+                          )}
+                      </Card>
+                  );
+              })}
+          </div>
+      </div>
+  );
+};
+
+const HistoryView = ({ entries, trackers, actions }) => (
+  <div className="space-y-4 animate-fade-in">
+    <h2 className="text-xl font-bold text-slate-800">History Log</h2>
+    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      <table className="w-full text-sm text-left">
+        <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-medium">
+          <tr>
+            <th className="p-4">Date</th>
+            <th className="p-4">Tracker</th>
+            <th className="p-4">Details</th>
+            <th className="p-4 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {entries.map(entry => {
+             const tracker = trackers.find(t => t.id === entry.trackerId);
+             const color = tracker && COLOR_OPTIONS[tracker.colorIndex] ? COLOR_OPTIONS[tracker.colorIndex] : COLOR_OPTIONS[0];
+             const getDetails = (e) => {
+                 const parts = [];
+                 if (e.boolean !== undefined) parts.push(e.boolean ? 'Yes' : 'No');
+                 if (e.scale5) parts.push(`Rating: ${e.scale5}`);
+                 if (e.scale10) parts.push(`Level: ${e.scale10}`);
+                 if (e.number) parts.push(`Value: ${e.number}`);
+                 if (e.duration) parts.push(`${e.duration} min`);
+                 if (e.text) parts.push(e.text);
+                 if (e.notes && !e.text) parts.push(e.notes);
+                 if (e.value && parts.length === 0) parts.push(e.value);
+                 return parts.map((p, i) => (<div key={i} className="truncate max-w-xs">{p}</div>));
+             };
+
+             return (
+              <tr key={entry.id} className="hover:bg-slate-50">
+                <td className="p-4 whitespace-nowrap text-slate-500">
+                  {new Date(entry.date).toLocaleDateString()} <br/>
+                  <span className="text-xs text-slate-400">{new Date(entry.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                </td>
+                <td className="p-4">
+                   {tracker ? (
+                       <span className={`px-2 py-1 rounded-full text-xs font-bold ${color.bg} ${color.text}`}>{tracker.name}</span>
+                   ) : (
+                       <span className="px-2 py-1 bg-slate-100 text-slate-500 rounded text-xs">Unknown</span>
+                   )}
+                </td>
+                <td className="p-4 text-slate-700 text-xs">{getDetails(entry)}</td>
+                <td className="p-4 text-right">
+                  <div className="flex justify-end gap-1">
+                    {tracker && (
+                      <button onClick={() => actions.openEntryModal(tracker, entry)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><Edit2 size={16} /></button>
+                    )}
+                    <button onClick={() => actions.handleDeleteEntry(entry.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                  </div>
+                </td>
+              </tr>
+             )
+          })}
+        </tbody>
+      </table>
+      {entries.length === 0 && <div className="p-8 text-center text-slate-400">No entries yet.</div>}
+    </div>
+  </div>
+);
+
+const SettingsView = ({ trackers, actions }) => (
+  <div className="space-y-6 animate-fade-in">
+      <div className="flex justify-between items-center">
+          <h2 className="text-xl font-bold text-slate-800">Manage Trackers</h2>
+          <Button onClick={() => actions.setIsTrackerBuilderOpen(true)}><Plus size={16}/> New Tracker</Button>
+      </div>
+      <div className="space-y-3">
+          {trackers.map(tracker => {
+              const Icon = ICON_MAP[tracker.icon] || Activity;
+              const color = COLOR_OPTIONS[tracker.colorIndex] || COLOR_OPTIONS[0];
+              const types = tracker.types || [tracker.dataType];
+              return (
+                  <Card key={tracker.id} className="p-4 flex justify-between items-center">
+                      <div className="flex items-center gap-4">
+                          <div className={`p-3 rounded-lg ${color.bg} ${color.text}`}><Icon size={24} /></div>
+                          <div>
+                              <h3 className="font-bold text-slate-800">{tracker.name}</h3>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                  {types.map(t => (<span key={t} className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded border border-slate-200">{DATA_TYPES.find(d => d.id === t)?.label || t}</span>))}
+                              </div>
+                          </div>
+                      </div>
+                      <Button variant="ghost" onClick={() => actions.handleDeleteTracker(tracker.id)} className="text-red-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={18} /></Button>
+                  </Card>
+              );
+          })}
+          {trackers.length === 0 && (
+              <div className="text-center py-12 text-slate-400 bg-white rounded-xl border border-dashed border-slate-300">
+                  <Settings size={48} className="mx-auto mb-3 opacity-20" />
+                  <p>No custom trackers defined.</p>
+                  <p className="text-sm">Create one to start tracking your health!</p>
+              </div>
+          )}
+      </div>
+  </div>
+);
+
 // --- Main Application Component ---
 
 export default function App() {
@@ -368,8 +685,6 @@ export default function App() {
     }
   };
 
-  // --- Render Helpers ---
-
   const renderDynamicForm = () => {
     if (!selectedTracker) return null;
     const typesToRender = selectedTracker.types || [selectedTracker.dataType];
@@ -417,7 +732,7 @@ export default function App() {
     );
   };
 
-  // --- Views ---
+  // --- Main View ---
   
   const isPreview = typeof __firebase_config !== 'undefined';
   const hasConfig = firebaseConfig && firebaseConfig.apiKey;
@@ -434,319 +749,11 @@ export default function App() {
       );
   }
 
-  const Dashboard = () => {
-    const todayStr = new Date().toISOString().split('T')[0];
-    const todaysMeds = medications.filter(m => m.active).map(med => {
-        return med.times.map(time => ({ ...med, scheduledTime: time, isTaken: medLogs.some(l => l.medicationId === med.id && l.date === todayStr && l.time === time) }));
-    }).flat().sort((a,b) => a.scheduledTime.localeCompare(b.scheduledTime));
-
-    return (
-      <div className="space-y-6 animate-fade-in">
-        <section>
-          <div className="flex justify-between items-center mb-3">
-             <h2 className="text-lg font-bold text-slate-800">Quick Track</h2>
-             <Button variant="ghost" className="text-sm" onClick={() => setActiveTab('settings')}><Edit2 size={14} /> Customize</Button>
-          </div>
-          {trackers.length === 0 ? (
-             <div className="bg-white border-2 border-dashed border-slate-300 rounded-xl p-6 text-center">
-                <p className="text-slate-500 mb-4">You haven't set up any trackers yet.</p>
-                <Button onClick={() => setIsTrackerBuilderOpen(true)}>Create Your First Tracker</Button>
-             </div>
-          ) : (
-             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {trackers.map((tracker) => {
-                  const Icon = ICON_MAP[tracker.icon] || Activity;
-                  const color = COLOR_OPTIONS[tracker.colorIndex] || COLOR_OPTIONS[0];
-                  const types = tracker.types || [tracker.dataType];
-                  return (
-                    <button key={tracker.id} onClick={() => openEntryModal(tracker)} className="flex flex-col items-center justify-center p-4 bg-white rounded-xl shadow-sm border border-slate-100 hover:shadow-md hover:border-blue-200 transition-all group">
-                      <div className={`p-3 rounded-full mb-2 ${color.bg} ${color.text} group-hover:scale-110 transition-transform`}><Icon size={24} /></div>
-                      <span className="font-semibold text-slate-700">{tracker.name}</span>
-                      <div className="flex gap-1 mt-1 justify-center flex-wrap px-2">
-                        {types.map(t => (<span key={t} className="text-[9px] px-1 py-0.5 bg-slate-100 text-slate-500 rounded uppercase tracking-wider font-bold">{DATA_TYPES.find(d => d.id === t)?.label.split(' ')[0] || t}</span>))}
-                      </div>
-                    </button>
-                  );
-                })}
-             </div>
-          )}
-        </section>
-
-        <section>
-          <div className="flex justify-between items-center mb-3">
-            <h2 className="text-lg font-bold text-slate-800">Medications</h2>
-            <Button variant="ghost" className="text-sm" onClick={() => setActiveTab('meds')}>Manage</Button>
-          </div>
-          <Card className="divide-y divide-slate-100">
-            {todaysMeds.length === 0 ? (
-              <div className="p-6 text-center text-slate-500 text-sm">No medications scheduled for today.</div>
-            ) : (
-              todaysMeds.map((med, idx) => (
-                <div key={`${med.id}-${med.scheduledTime}-${idx}`} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                  <div className="flex items-center gap-4">
-                    <button onClick={() => toggleMedTaken(med.id, med.scheduledTime)} className={`transition-all ${med.isTaken ? 'text-green-500' : 'text-slate-300 hover:text-green-400'}`}>
-                      {med.isTaken ? <CheckCircle size={28} className="fill-green-100" /> : <Circle size={28} />}
-                    </button>
-                    <div>
-                      <div className={`font-semibold ${med.isTaken ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{med.name}</div>
-                      <div className="text-xs text-slate-500 flex items-center gap-1"><Clock size={12} /> {med.scheduledTime} &bull; {med.dosage}</div>
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-          </Card>
-        </section>
-
-        <section>
-           <h2 className="text-lg font-bold text-slate-800 mb-3">Recent Logs</h2>
-           <Card className="divide-y divide-slate-100">
-             {entries.slice(0, 5).map(entry => {
-               const tracker = trackers.find(t => t.id === entry.trackerId);
-               const Icon = tracker && ICON_MAP[tracker.icon] ? ICON_MAP[tracker.icon] : Activity;
-               const color = tracker && COLOR_OPTIONS[tracker.colorIndex] ? COLOR_OPTIONS[tracker.colorIndex] : COLOR_OPTIONS[0];
-
-               const getSummary = (e) => {
-                   const parts = [];
-                   if (e.boolean !== undefined) parts.push(e.boolean ? 'Yes' : 'No');
-                   if (e.scale5) parts.push(`Rating: ${e.scale5}/5`);
-                   if (e.scale10) parts.push(`Level: ${e.scale10}/10`);
-                   if (e.number) parts.push(`Val: ${e.number}`);
-                   if (e.duration) parts.push(`${e.duration}m`);
-                   if (e.text) parts.push(`"${e.text}"`);
-                   if (e.value && parts.length === 0) parts.push(e.value);
-                   if (e.notes && !e.text) parts.push(e.notes);
-                   return parts.join(' • ');
-               };
-
-               return (
-                 <div key={entry.id} className="p-4 flex items-center gap-3">
-                   <div className={`p-2 rounded-full ${color.bg} ${color.text}`}><Icon size={16} /></div>
-                   <div className="flex-1">
-                     <div className="flex justify-between">
-                       <span className="font-medium text-slate-800">{tracker ? tracker.name : 'Unknown Tracker'}</span>
-                       <span className="text-xs text-slate-400">{new Date(entry.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                     </div>
-                     <div className="text-sm text-slate-600 truncate max-w-[250px]">{getSummary(entry)}</div>
-                   </div>
-                 </div>
-               );
-             })}
-             {entries.length === 0 && <div className="p-4 text-center text-slate-500 text-sm">No recent activity.</div>}
-           </Card>
-        </section>
-      </div>
-    );
+  // Group generic actions to pass down easily
+  const actions = {
+    setActiveTab, setIsTrackerBuilderOpen, openEntryModal, toggleMedTaken,
+    setIsMedModalOpen, handleDeleteMedication, handleDeleteEntry, handleDeleteTracker
   };
-
-  const Reports = () => {
-    const oneWeekAgo = new Date();
-    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-    const weeklyEntries = entries.filter(e => new Date(e.date) >= oneWeekAgo);
-
-    const groupedData = useMemo(() => {
-        const groups = {};
-        trackers.forEach(t => groups[t.id] = { ...t, values: [] });
-        weeklyEntries.forEach(e => {
-            if (groups[e.trackerId]) {
-                let val = null;
-                let type = 'none';
-                if (e.scale5 !== undefined) { val = e.scale5; type = 'scale5'; }
-                else if (e.scale10 !== undefined) { val = e.scale10; type = 'scale10'; }
-                else if (e.number !== undefined) { val = e.number; type = 'number'; }
-                else if (e.duration !== undefined) { val = e.duration; type = 'duration'; }
-                else if (e.boolean !== undefined) { val = e.boolean ? 1 : 0; type = 'boolean'; }
-                else if (e.value !== undefined) { 
-                    val = typeof e.value === 'boolean' ? (e.value ? 1 : 0) : Number(e.value);
-                    type = isNaN(val) ? 'text' : 'legacy'; 
-                }
-                if (val !== null && type !== 'text') {
-                    groups[e.trackerId].values.push(val);
-                    if (!groups[e.trackerId].graphType) groups[e.trackerId].graphType = type;
-                }
-            }
-        });
-        return groups;
-    }, [weeklyEntries, trackers]);
-
-    return (
-        <div className="space-y-6">
-            <h2 className="text-xl font-bold text-slate-800">Weekly Summary</h2>
-            {trackers.length === 0 && <p className="text-slate-500">No trackers to report on.</p>}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {Object.values(groupedData).map(group => {
-                    if (group.values.length === 0) return null;
-                    const avg = group.values.reduce((a,b) => a+b, 0) / group.values.length;
-                    const total = group.values.reduce((a,b) => a+b, 0);
-                    const color = COLOR_OPTIONS[group.colorIndex] || COLOR_OPTIONS[0];
-                    const type = group.graphType;
-                    return (
-                        <Card key={group.id} className="p-4">
-                            <div className="flex items-center gap-2 mb-4">
-                                <div className={`w-2 h-2 rounded-full ${color.bg.replace('bg-', 'bg-')}`} style={{backgroundColor: color.hex}} />
-                                <h3 className="font-bold text-slate-700">{group.name}</h3>
-                            </div>
-                            {(type === 'scale5' || type === 'scale10') && (
-                                <div>
-                                    <div className="text-3xl font-bold text-slate-800">{avg.toFixed(1)}</div>
-                                    <div className="text-xs text-slate-400 uppercase">Average Score</div>
-                                    <div className="mt-3 h-1 w-full bg-slate-100 rounded-full overflow-hidden">
-                                        <div className="h-full" style={{ width: `${(avg / (type === 'scale5' ? 5 : 10)) * 100}%`, backgroundColor: color.hex }} />
-                                    </div>
-                                </div>
-                            )}
-                            {(type === 'number' || type === 'duration' || type === 'legacy') && (
-                                <div>
-                                     <div className="text-3xl font-bold text-slate-800">{total}</div>
-                                     <div className="text-xs text-slate-400 uppercase">Weekly Total</div>
-                                     <div className="mt-2 text-sm text-slate-600">Daily Avg: {(total / 7).toFixed(1)}</div>
-                                </div>
-                            )}
-                             {type === 'boolean' && (
-                                <div>
-                                     <div className="text-3xl font-bold text-slate-800">{total} <span className="text-sm font-normal text-slate-400">/ {group.values.length}</span></div>
-                                     <div className="text-xs text-slate-400 uppercase">Times Occurred</div>
-                                </div>
-                            )}
-                        </Card>
-                    );
-                })}
-            </div>
-        </div>
-    );
-  };
-
-  const Settings = () => (
-    <div className="space-y-6">
-        <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold text-slate-800">Manage Trackers</h2>
-            <Button onClick={() => setIsTrackerBuilderOpen(true)}><Plus size={16}/> New Tracker</Button>
-        </div>
-        <div className="space-y-3">
-            {trackers.map(tracker => {
-                const Icon = ICON_MAP[tracker.icon] || Activity;
-                const color = COLOR_OPTIONS[tracker.colorIndex] || COLOR_OPTIONS[0];
-                const types = tracker.types || [tracker.dataType];
-                return (
-                    <Card key={tracker.id} className="p-4 flex justify-between items-center">
-                        <div className="flex items-center gap-4">
-                            <div className={`p-3 rounded-lg ${color.bg} ${color.text}`}><Icon size={24} /></div>
-                            <div>
-                                <h3 className="font-bold text-slate-800">{tracker.name}</h3>
-                                <div className="flex flex-wrap gap-1 mt-1">
-                                    {types.map(t => (<span key={t} className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded border border-slate-200">{DATA_TYPES.find(d => d.id === t)?.label || t}</span>))}
-                                </div>
-                            </div>
-                        </div>
-                        <Button variant="ghost" onClick={() => handleDeleteTracker(tracker.id)} className="text-red-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={18} /></Button>
-                    </Card>
-                );
-            })}
-            {trackers.length === 0 && (
-                <div className="text-center py-12 text-slate-400 bg-white rounded-xl border border-dashed border-slate-300">
-                    <Settings size={48} className="mx-auto mb-3 opacity-20" />
-                    <p>No custom trackers defined.</p>
-                    <p className="text-sm">Create one to start tracking your health!</p>
-                </div>
-            )}
-        </div>
-    </div>
-  );
-
-  const Medications = () => (
-    <div className="space-y-4">
-        <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold text-slate-800">My Medications</h2>
-            <Button onClick={() => setIsMedModalOpen(true)} className="text-sm"><Plus size={16}/> Add New</Button>
-        </div>
-        {medications.length === 0 ? (
-            <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed border-slate-300">
-                <Pill size={40} className="mx-auto text-slate-300 mb-2" />
-                <p className="text-slate-500">No medications added yet.</p>
-            </div>
-        ) : (
-            <div className="grid gap-4">
-                {medications.map(med => (
-                    <Card key={med.id} className="p-4 flex justify-between items-start">
-                        <div>
-                            <h3 className="font-bold text-slate-800 text-lg">{med.name}</h3>
-                            <div className="flex flex-wrap gap-2 mt-2">
-                                <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs font-semibold">{med.dosage}</span>
-                                <span className="px-2 py-1 bg-purple-50 text-purple-700 rounded text-xs font-semibold">{med.frequency}</span>
-                            </div>
-                            <div className="mt-3 flex gap-2">
-                                {med.times.map(t => (<span key={t} className="flex items-center gap-1 text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded"><Clock size={10} /> {t}</span>))}
-                            </div>
-                        </div>
-                        <Button variant="ghost" onClick={() => handleDeleteMedication(med.id)} className="text-red-400 hover:text-red-600"><Trash2 size={18} /></Button>
-                    </Card>
-                ))}
-            </div>
-        )}
-    </div>
-  );
-
-  const History = () => (
-    <div className="space-y-4">
-      <h2 className="text-xl font-bold text-slate-800">History Log</h2>
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        <table className="w-full text-sm text-left">
-          <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-medium">
-            <tr>
-              <th className="p-4">Date</th>
-              <th className="p-4">Tracker</th>
-              <th className="p-4">Details</th>
-              <th className="p-4 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {entries.map(entry => {
-               const tracker = trackers.find(t => t.id === entry.trackerId);
-               const color = tracker && COLOR_OPTIONS[tracker.colorIndex] ? COLOR_OPTIONS[tracker.colorIndex] : COLOR_OPTIONS[0];
-               const getDetails = (e) => {
-                   const parts = [];
-                   if (e.boolean !== undefined) parts.push(e.boolean ? 'Yes' : 'No');
-                   if (e.scale5) parts.push(`Rating: ${e.scale5}`);
-                   if (e.scale10) parts.push(`Level: ${e.scale10}`);
-                   if (e.number) parts.push(`Value: ${e.number}`);
-                   if (e.duration) parts.push(`${e.duration} min`);
-                   if (e.text) parts.push(e.text);
-                   if (e.notes && !e.text) parts.push(e.notes);
-                   if (e.value && parts.length === 0) parts.push(e.value);
-                   return parts.map((p, i) => (<div key={i} className="truncate max-w-xs">{p}</div>));
-               };
-
-               return (
-                <tr key={entry.id} className="hover:bg-slate-50">
-                  <td className="p-4 whitespace-nowrap text-slate-500">
-                    {new Date(entry.date).toLocaleDateString()} <br/>
-                    <span className="text-xs text-slate-400">{new Date(entry.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
-                  </td>
-                  <td className="p-4">
-                     {tracker ? (
-                         <span className={`px-2 py-1 rounded-full text-xs font-bold ${color.bg} ${color.text}`}>{tracker.name}</span>
-                     ) : (
-                         <span className="px-2 py-1 bg-slate-100 text-slate-500 rounded text-xs">Unknown</span>
-                     )}
-                  </td>
-                  <td className="p-4 text-slate-700 text-xs">{getDetails(entry)}</td>
-                  <td className="p-4 text-right">
-                    <div className="flex justify-end gap-1">
-                      {tracker && (
-                        <button onClick={() => openEntryModal(tracker, entry)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><Edit2 size={16} /></button>
-                      )}
-                      <button onClick={() => handleDeleteEntry(entry.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
-                    </div>
-                  </td>
-                </tr>
-               )
-            })}
-          </tbody>
-        </table>
-        {entries.length === 0 && <div className="p-8 text-center text-slate-400">No entries yet.</div>}
-      </div>
-    </div>
-  );
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-20 sm:pb-0 text-slate-900">
@@ -763,11 +770,11 @@ export default function App() {
 
       <div className={`transition-all duration-300 ${isSidebarCollapsed ? 'sm:ml-20' : 'sm:ml-64'}`}>
         <main className="max-w-4xl mx-auto p-4">
-            {activeTab === 'dashboard' && <Dashboard />}
-            {activeTab === 'meds' && <Medications />}
-            {activeTab === 'reports' && <Reports />}
-            {activeTab === 'history' && <History />}
-            {activeTab === 'settings' && <Settings />}
+            {activeTab === 'dashboard' && <DashboardView trackers={trackers} medications={medications} medLogs={medLogs} entries={entries} actions={actions} />}
+            {activeTab === 'meds' && <MedicationsView medications={medications} actions={actions} />}
+            {activeTab === 'reports' && <ReportsView entries={entries} trackers={trackers} />}
+            {activeTab === 'history' && <HistoryView entries={entries} trackers={trackers} actions={actions} />}
+            {activeTab === 'settings' && <SettingsView trackers={trackers} actions={actions} />}
         </main>
       </div>
 
